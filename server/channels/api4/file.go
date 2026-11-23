@@ -23,6 +23,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/channels/app"
 	"github.com/mattermost/mattermost/server/v8/channels/utils"
+	"github.com/mattermost/mattermost/server/v8/platform/shared/filestore"
 	"github.com/mattermost/mattermost/server/v8/platform/shared/web"
 )
 
@@ -887,6 +888,27 @@ func getFile(c *Context, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func fileImageReader(a *app.App, path string) (filestore.ReadCloseSeeker, *model.AppError) {
+	reader, appErr := a.FileReader(path)
+	if appErr == nil {
+		// S3 opens objects lazily. Resolve seek errors before http.ServeContent
+		// turns them into a generic HTTP 500.
+		_, err := reader.Seek(0, io.SeekEnd)
+		if err == nil {
+			_, err = reader.Seek(0, io.SeekStart)
+		}
+		if err == nil {
+			return reader, nil
+		}
+		reader.Close()
+		appErr = model.NewAppError("fileImageReader", "api.file.file_reader.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
+	}
+	if filestore.IsFileNotFound(appErr) {
+		appErr.StatusCode = http.StatusNotFound
+	}
+	return nil, appErr
+}
+
 func getFileThumbnail(c *Context, w http.ResponseWriter, r *http.Request) {
 	c.RequireFileId()
 	if c.Err != nil {
@@ -936,10 +958,9 @@ func getFileThumbnail(c *Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileReader, err := c.App.FileReader(info.ThumbnailPath)
+	fileReader, err := fileImageReader(c.App, info.ThumbnailPath)
 	if err != nil {
 		c.Err = err
-		c.Err.StatusCode = http.StatusNotFound
 		return
 	}
 	defer fileReader.Close()
@@ -1066,10 +1087,9 @@ func getFilePreview(c *Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileReader, err := c.App.FileReader(info.PreviewPath)
+	fileReader, err := fileImageReader(c.App, info.PreviewPath)
 	if err != nil {
 		c.Err = err
-		c.Err.StatusCode = http.StatusNotFound
 		return
 	}
 	defer fileReader.Close()
