@@ -3,6 +3,22 @@
 
 package filestore
 
+import (
+	"errors"
+	"io/fs"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
+	s3 "github.com/minio/minio-go/v7"
+)
+
+// IsFileNotFound reports whether the requested file is missing from storage.
+func IsFileNotFound(err error) bool {
+	s3Err, isS3Error := errors.AsType[s3.ErrorResponse](err)
+	return errors.Is(err, fs.ErrNotExist) ||
+		(isS3Error && s3Err.Code == s3.NoSuchKey) ||
+		bloberror.HasCode(err, bloberror.BlobNotFound)
+}
+
 // FileBackendAuthError is returned when testing a connection and authentication
 // against the file storage backend fails. Backends should wrap the underlying
 // auth failure in this type so the admin Test Connection flow can surface a

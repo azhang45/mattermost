@@ -153,6 +153,7 @@
       summary: Get a file's thumbnail
       description: |
         Gets a file's thumbnail.
+        If the thumbnail object is missing from file storage, returns `404` even if the original file is available. Storage access failures return `500`.
         ##### Permissions
         Must have `read_channel` permission or be uploader of the file.
       operationId: GetFileThumbnail
@@ -176,6 +177,8 @@
                 $ref: "#/components/schemas/AppError"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
         "501":
           $ref: "#/components/responses/NotImplemented"
     head:
@@ -201,6 +204,8 @@
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
         "501":
           $ref: "#/components/responses/NotImplemented"
   "/api/v4/files/{file_id}/preview":
@@ -210,6 +215,7 @@
       summary: Get a file's preview
       description: |
         Gets a file's preview.
+        If the preview object is missing from file storage, returns `404` even if the original file is available. Storage access failures return `500`.
         ##### Permissions
         Must have `read_channel` permission or be uploader of the file.
       operationId: GetFilePreview
@@ -233,6 +239,8 @@
                 $ref: "#/components/schemas/AppError"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
         "501":
           $ref: "#/components/responses/NotImplemented"
     head:
@@ -258,6 +266,8 @@
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
         "501":
           $ref: "#/components/responses/NotImplemented"
   "/api/v4/files/{file_id}/link":

@@ -19,6 +19,7 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/http"
+	"net/http/httptest"
 	"net/textproto"
 	"net/url"
 	"os"
@@ -2381,6 +2382,108 @@ func TestGetFileLink(t *testing.T) {
 	require.NoError(t, err)
 	err = th.cleanupTestFile(fileInfo)
 	require.NoError(t, err)
+}
+
+func TestGetFilePreviewAndThumbnailFromS3(t *testing.T) {
+	mainHelper.Parallel(t)
+
+	const bucket = "file-images-test"
+	const originalPath = "test.png"
+	original := fileBytes(t, originalPath)
+	derivedImage := fileBytes(t, "testjpg.jpg")
+	modTime := time.Unix(1_700_000_000, 0)
+
+	objectStore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/" + bucket, "/" + bucket + "/":
+			w.WriteHeader(http.StatusOK)
+		case "/" + bucket + "/" + originalPath:
+			http.ServeContent(w, r, originalPath, modTime, bytes.NewReader(original))
+		case "/" + bucket + "/test_preview.jpg", "/" + bucket + "/test_thumb.jpg":
+			http.ServeContent(w, r, "testjpg.jpg", modTime, bytes.NewReader(derivedImage))
+		case "/" + bucket + "/denied_preview.jpg", "/" + bucket + "/denied_thumb.jpg":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(objectStore.Close)
+
+	th := SetupConfig(t, func(cfg *model.Config) {
+		cfg.FileSettings.DriverName = model.NewPointer(model.ImageDriverS3)
+		cfg.FileSettings.AmazonS3Endpoint = model.NewPointer(strings.TrimPrefix(objectStore.URL, "http://"))
+		cfg.FileSettings.AmazonS3Bucket = model.NewPointer(bucket)
+		cfg.FileSettings.AmazonS3Region = model.NewPointer("us-east-1")
+		cfg.FileSettings.AmazonS3AccessKeyId = model.NewPointer(model.MinioAccessKey)
+		cfg.FileSettings.AmazonS3SecretAccessKey = model.NewPointer(model.MinioSecretKey)
+		cfg.FileSettings.AmazonS3SSL = model.NewPointer(false)
+	}).InitBasic(t)
+
+	for _, tc := range []struct {
+		name          string
+		previewPath   string
+		thumbnailPath string
+		wantStatus    int
+	}{
+		{
+			name:          "objects available",
+			previewPath:   "test_preview.jpg",
+			thumbnailPath: "test_thumb.jpg",
+			wantStatus:    http.StatusOK,
+		},
+		{
+			name:          "missing object",
+			previewPath:   "missing_preview.jpg",
+			thumbnailPath: "missing_thumb.jpg",
+			wantStatus:    http.StatusNotFound,
+		},
+		{
+			name:          "storage access denied",
+			previewPath:   "denied_preview.jpg",
+			thumbnailPath: "denied_thumb.jpg",
+			wantStatus:    http.StatusInternalServerError,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info, err := th.Store.FileInfo().Save(th.Context, &model.FileInfo{
+				CreatorId:       th.BasicUser.Id,
+				ChannelId:       th.BasicChannel.Id,
+				Name:            originalPath,
+				Path:            originalPath,
+				MimeType:        "image/png",
+				Size:            int64(len(original)),
+				PreviewPath:     tc.previewPath,
+				ThumbnailPath:   tc.thumbnailPath,
+				HasPreviewImage: true,
+			})
+			require.NoError(t, err)
+
+			ctx := context.Background()
+			data, _, err := th.Client.GetFile(ctx, info.Id)
+			require.NoError(t, err)
+			require.Equal(t, original, data)
+
+			for _, endpoint := range []struct {
+				name string
+				get  func(context.Context, string) ([]byte, *model.Response, error)
+			}{
+				{name: "preview", get: th.Client.GetFilePreview},
+				{name: "thumbnail", get: th.Client.GetFileThumbnail},
+			} {
+				t.Run(endpoint.name, func(t *testing.T) {
+					data, resp, err := endpoint.get(ctx, info.Id)
+					if tc.wantStatus == http.StatusOK {
+						require.NoError(t, err)
+						require.Equal(t, derivedImage, data)
+					} else {
+						require.Error(t, err)
+					}
+					require.NotNil(t, resp)
+					require.Equal(t, tc.wantStatus, resp.StatusCode)
+				})
+			}
+		})
+	}
 }
 
 func TestGetFilePreview(t *testing.T) {
