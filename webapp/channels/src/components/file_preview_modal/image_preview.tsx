@@ -16,6 +16,8 @@ import './image_preview.scss';
 interface Props {
     fileInfo: FileInfo;
     canDownloadFiles: boolean;
+    src?: string;
+    onImageError?: () => void;
     scale?: number;
     translate?: {x: number; y: number};
     isZoomed?: boolean;
@@ -40,9 +42,7 @@ function buildTransform(scale?: number, translate?: {x: number; y: number}): str
     return parts.join(' ');
 }
 
-export default function ImagePreview({fileInfo, canDownloadFiles, scale, translate, isZoomed, isDragging, onWheel, onMouseDown}: Props) {
-    const isExternalFile = !fileInfo.id;
-
+export default function ImagePreview({fileInfo, canDownloadFiles, src, onImageError, scale, translate, isZoomed, isDragging, onWheel, onMouseDown}: Props) {
     // React's synthetic wheel events are passive by default in modern React, so
     // e.preventDefault() inside them is a no-op. Bind a native non-passive
     // listener via ref so the page can't scroll while zooming the image.
@@ -56,14 +56,13 @@ export default function ImagePreview({fileInfo, canDownloadFiles, scale, transla
         return () => node.removeEventListener('wheel', onWheel);
     }, [onWheel]);
 
-    let fileUrl;
-    let previewUrl;
-    if (isExternalFile) {
-        fileUrl = fileInfo.link;
-        previewUrl = fileInfo.link;
-    } else {
-        fileUrl = getFileDownloadUrl(fileInfo.id);
-        previewUrl = fileInfo.has_preview_image ? getFilePreviewUrl(fileInfo.id) : fileUrl;
+    let previewUrl = src;
+    if (previewUrl === undefined) {
+        if (fileInfo.id) {
+            previewUrl = fileInfo.has_preview_image ? getFilePreviewUrl(fileInfo.id) : getFileDownloadUrl(fileInfo.id);
+        } else {
+            previewUrl = fileInfo.link;
+        }
     }
 
     const transform = buildTransform(scale, translate);
@@ -99,6 +98,7 @@ export default function ImagePreview({fileInfo, canDownloadFiles, scale, transla
                 <img
                     className={imgClassName}
                     src={previewUrl}
+                    onError={onImageError}
                     style={imgStyle}
                     draggable={false}
                 />
@@ -123,6 +123,7 @@ export default function ImagePreview({fileInfo, canDownloadFiles, scale, transla
                 data-testid='imagePreview'
                 alt={'preview url image'}
                 src={previewUrl}
+                onError={onImageError}
                 style={imgStyle}
                 draggable={false}
             />

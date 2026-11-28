@@ -21,7 +21,6 @@ const FileInfoPreview = ({
 }: Props) => {
     const intl = useIntl();
 
-    // non-image files include a section providing details about the file
     const infoParts = [];
 
     if (fileInfo.extension !== '') {

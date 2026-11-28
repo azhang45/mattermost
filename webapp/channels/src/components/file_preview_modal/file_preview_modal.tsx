@@ -68,7 +68,7 @@ type State = {
     imageIndex: number;
     imageHeight: number | string;
     loaded: Record<number, boolean>;
-    prevFileInfosCount: number;
+    imageSources: Partial<Record<string, string | null>>;
     prevFileIds: string[];
     progress: Record<number, number>;
     showCloseBtn: boolean;
@@ -102,6 +102,8 @@ export function computeZoomAtCursor(
 }
 
 export default class FilePreviewModal extends React.PureComponent<Props, State> {
+    private pendingPreviews = new Map<string, XMLHttpRequest>();
+
     static defaultProps = {
         fileInfos: [],
         startIndex: 0,
@@ -116,7 +118,7 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
             imageIndex: this.props.startIndex,
             imageHeight: '100%',
             loaded: Utils.fillRecord(false, this.props.fileInfos.length),
-            prevFileInfosCount: 0,
+            imageSources: {},
             prevFileIds: this.props.fileInfos.map(FilePreviewModal.getFileIdentity),
             progress: Utils.fillRecord(0, this.props.fileInfos.length),
             showCloseBtn: false,
@@ -225,7 +227,28 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
         this.showImage(this.props.startIndex);
     }
 
+    componentDidUpdate(_prevProps: Props, prevState: State) {
+        if (prevState.prevFileIds === this.state.prevFileIds) {
+            return;
+        }
+
+        const fileIds = new Set(this.state.prevFileIds);
+        for (const [id, request] of this.pendingPreviews) {
+            if (!fileIds.has(id)) {
+                this.pendingPreviews.delete(id);
+                request.abort();
+            }
+        }
+
+        const index = this.state.imageIndex;
+        const fileInfo = this.props.fileInfos[index];
+        if (this.state.show && fileInfo && this.state.prevFileIds[index] !== prevState.prevFileIds[index]) {
+            this.loadImage(index);
+        }
+    }
+
     componentWillUnmount() {
+        this.cancelPendingPreviews();
         document.removeEventListener('keyup', this.handleKeyPress);
         document.removeEventListener('keydown', this.handleKeyDown);
         document.removeEventListener('mousemove', this.handleDocumentMouseMove);
@@ -252,12 +275,9 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
         // same-index identity swap (e.g. a websocket post update replacing
         // attachment N without changing array length).
         const nextFileIds = props.fileInfos.map(FilePreviewModal.getFileIdentity);
-        const lengthChanged = props.fileInfos.length !== state.prevFileInfosCount;
-        const identitiesChanged = !lengthChanged && nextFileIds.some((id, i) => id !== state.prevFileIds[i]);
-        if (lengthChanged || identitiesChanged) {
+        if (nextFileIds.length !== state.prevFileIds.length || nextFileIds.some((id, i) => id !== state.prevFileIds[i])) {
             updatedState.loaded = Utils.fillRecord(false, props.fileInfos.length);
             updatedState.progress = Utils.fillRecord(0, props.fileInfos.length);
-            updatedState.prevFileInfosCount = props.fileInfos.length;
             updatedState.prevFileIds = nextFileIds;
 
             // Reconcile scale/translate per index: preserve entries whose
@@ -277,19 +297,16 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
     }
 
     showImage = (id: number) => {
-        this.setState({imageIndex: id});
+        if (!this.state.show || !this.props.fileInfos[id]) {
+            return;
+        }
 
         const imageHeight = window.innerHeight - 100;
-        this.setState({imageHeight});
+        this.setState({imageIndex: id, imageHeight});
 
         if (!this.state.loaded[id]) {
             this.loadImage(id);
         }
-    };
-
-    isImageUrl = (url: string): boolean => {
-        const fileType = Utils.getFileType(url);
-        return fileType === FileTypes.IMAGE || fileType === FileTypes.SVG;
     };
 
     private getFileTypeFromFileInfo = (fileInfo: FileInfo | LinkInfo): typeof FileTypes[keyof typeof FileTypes] => {
@@ -320,11 +337,12 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
             let previewUrl = '';
             if (isFileInfo(fileInfo)) {
                 if (fileInfo.has_preview_image) {
-                    previewUrl = getFilePreviewUrl(fileInfo.id);
-                } else {
-                    // some images (eg animated gifs) just show the file itself and not a preview
-                    previewUrl = getFileUrl(fileInfo.id);
+                    this.loadGeneratedPreview(fileInfo);
+                    return;
                 }
+
+                // some images (eg animated gifs) just show the file itself and not a preview
+                previewUrl = getFileUrl(fileInfo.id);
             } else if (isLinkInfo(fileInfo)) {
                 // For LinkInfo, use the link directly
                 previewUrl = fileInfo.link;
@@ -340,6 +358,46 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
             this.handleImageLoaded(index);
         }
     };
+
+    private loadGeneratedPreview(fileInfo: FileInfo) {
+        const id = FilePreviewModal.getFileIdentity(fileInfo);
+        if (this.state.imageSources[id] !== undefined || this.pendingPreviews.has(id)) {
+            return;
+        }
+
+        const previewUrl = getFilePreviewUrl(fileInfo.id);
+        const complete = (src: string | null) => {
+            if (this.pendingPreviews.get(id) !== request) {
+                return;
+            }
+            this.setState(({imageSources}) => ({imageSources: {...imageSources, [id]: src}}), () => {
+                if (this.pendingPreviews.get(id) === request) {
+                    this.pendingPreviews.delete(id);
+                }
+            });
+        };
+
+        const request = Utils.loadImage(previewUrl, function onLoad() {
+            if (this.status === 404) {
+                complete(getFileUrl(fileInfo.id));
+            } else {
+                complete(this.status >= 200 && this.status < 300 ? previewUrl : null);
+            }
+        }, (progress) => {
+            const index = this.state.prevFileIds.indexOf(id);
+            if (index !== -1 && this.pendingPreviews.get(id) === request) {
+                this.handleImageProgress(index, progress);
+            }
+        }, () => complete(null));
+        this.pendingPreviews.set(id, request);
+    }
+
+    private cancelPendingPreviews() {
+        for (const request of this.pendingPreviews.values()) {
+            request.abort();
+        }
+        this.pendingPreviews.clear();
+    }
 
     handleImageLoaded = (index: number) => {
         this.setState((prevState) => {
@@ -515,6 +573,7 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
     };
 
     handleModalClose = () => {
+        this.cancelPendingPreviews();
         this.setState({show: false});
     };
 
@@ -537,10 +596,13 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
         }
 
         const fileInfo = this.props.fileInfos[this.state.imageIndex];
-        const fileText = this.state.content?.fileId === FilePreviewModal.getFileIdentity(fileInfo) ? this.state.content.text : '';
+        const fileIdentity = FilePreviewModal.getFileIdentity(fileInfo);
+        const fileText = this.state.content?.fileId === fileIdentity ? this.state.content.text : '';
 
         // Determine file type using helper method
         const fileType = this.getFileTypeFromFileInfo(fileInfo);
+        const usesGeneratedPreview = fileType === FileTypes.IMAGE && isFileInfo(fileInfo) && fileInfo.has_preview_image;
+        const imageSource = usesGeneratedPreview ? this.state.imageSources[fileIdentity] : undefined;
 
         let showPublicLink;
         let fileName;
@@ -568,14 +630,20 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
         let content;
         let zoomBar;
 
-        if (this.state.loaded[this.state.imageIndex]) {
-            if (fileType === FileTypes.IMAGE || fileType === FileTypes.SVG) {
+        if (usesGeneratedPreview ? imageSource !== undefined : this.state.loaded[this.state.imageIndex]) {
+            if (imageSource !== null && (fileType === FileTypes.IMAGE || fileType === FileTypes.SVG)) {
                 const currentScale = this.state.scale[this.state.imageIndex];
                 const currentTranslate = this.state.translate[this.state.imageIndex] ?? {x: 0, y: 0};
                 const defaultScale = FilePreviewModal.getDefaultScaleForFile(fileInfo);
                 content = (
                     <ImagePreview
+                        key={fileIdentity}
                         fileInfo={fileInfo as FileInfo}
+                        src={imageSource}
+                        onImageError={imageSource === undefined ? undefined : () => {
+                            this.setState(({imageSources}) => (imageSources[fileIdentity] === imageSource ?
+                                {imageSources: {...imageSources, [fileIdentity]: null}} : null));
+                        }}
                         canDownloadFiles={this.props.canDownloadFiles}
                         scale={currentScale}
                         translate={currentTranslate}
@@ -628,7 +696,7 @@ export default class FilePreviewModal extends React.PureComponent<Props, State> 
                         handleZoomReset={this.handleZoomReset}
                     />
                 );
-            } else if (hasSupportedLanguage(fileInfo)) {
+            } else if (imageSource !== null && hasSupportedLanguage(fileInfo)) {
                 dialogClassName += ' modal-code';
                 canCopyContent = true;
                 canToggleMarkdown = canToggleMarkdownPreview(fileInfo.extension, this.props.isMobileView);

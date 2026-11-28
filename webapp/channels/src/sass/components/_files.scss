@@ -178,6 +178,13 @@
     .file__image {
         @include mixins.pie-clearfix;
 
+        .single-image-view__fallback {
+            padding: 0;
+            border: 0;
+            background-color: transparent;
+            cursor: pointer;
+        }
+
         .image-header {
             display: flex;
             align-items: center;

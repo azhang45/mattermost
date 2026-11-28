@@ -40,6 +40,33 @@ describe('components/SingleImageView', () => {
         isFileRejected: false,
     };
 
+    test('shows the inline preview when only the thumbnail is missing', async () => {
+        mockFetch.mockResolvedValueOnce({status: 404, headers: new Headers()} as Response);
+        const {container} = renderWithContext(<SingleImageView {...baseProps}/>);
+
+        await waitFor(() => expect(container.querySelector('img[src$="/preview"]')).toBeInTheDocument());
+        const preview = container.querySelector('img[src$="/preview"]')!;
+        fireEvent.load(preview);
+
+        expect(preview).toBeVisible();
+        expect(screen.queryByRole('button', {name: baseProps.fileInfo.name})).not.toBeInTheDocument();
+    });
+
+    test('opens the modal from the keyboard after an inline preview fails to load', async () => {
+        const openModal = jest.fn();
+        const props = {...baseProps, actions: {...baseProps.actions, openModal}};
+        const {container} = renderWithContext(<SingleImageView {...props}/>);
+
+        await waitFor(() => expect(container.querySelector('img[src$="/preview"]')).toBeInTheDocument());
+        fireEvent.error(container.querySelector('img[src$="/preview"]')!);
+        expect(container.querySelector('img[src$="/preview"]')).not.toBeInTheDocument();
+        const fallback = screen.getByRole('button', {name: props.fileInfo.name});
+        expect(fallback).toHaveClass('generic');
+        fallback.focus();
+        await userEvent.keyboard('{Enter}');
+        expect(openModal).toHaveBeenCalledTimes(1);
+    });
+
     test('should reserve image space without loading preview while thumbnail check is pending', async () => {
         let resolveFetch: (response: Response) => void;
         mockFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => {

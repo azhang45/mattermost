@@ -1,33 +1,13 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {screen} from '@testing-library/react';
 import React from 'react';
 
-import {renderWithContext, userEvent} from 'tests/react_testing_utils';
+import {mockXHR} from 'tests/mock_xhr';
+import {act, renderWithContext, screen, userEvent} from 'tests/react_testing_utils';
 import {TestHelper} from 'utils/test_helper';
 
 import FileAttachment from './file_attachment';
-
-jest.mock('utils/utils', () => {
-    const original = jest.requireActual('utils/utils');
-    return {
-        ...original,
-        loadImage: jest.fn((id: string, callback: () => void) => {
-            if (id !== 'noLoad') {
-                callback();
-            }
-        }),
-    };
-});
-
-jest.mock('mattermost-redux/utils/file_utils', () => {
-    const original = jest.requireActual('mattermost-redux/utils/file_utils');
-    return {
-        ...original,
-        getFileThumbnailUrl: (fileId: string) => fileId,
-    };
-});
 
 describe('FileAttachment', () => {
     const baseFileInfo = {
@@ -71,5 +51,46 @@ describe('FileAttachment', () => {
         const blur = jest.spyOn(link, 'blur');
         await userEvent.click(link);
         expect(blur).toHaveBeenCalled();
+    });
+
+    test('shows a generic icon after one missing thumbnail request', async () => {
+        const network = mockXHR();
+        const handleImageClick = jest.fn();
+        const props = {...baseProps, handleImageClick, fileInfo: {...baseFileInfo, extension: 'png', name: 'picture.png'}};
+        const thumbnailPath = '/api/v4/files/thumbnail_id/thumbnail';
+        try {
+            renderWithContext(<FileAttachment {...props}/>);
+
+            act(() => network.respond(thumbnailPath, 404));
+            const link = screen.getByRole('link', {name: 'file thumbnail picture.png'});
+            expect(link.querySelector('.file-icon.generic')).toBeInTheDocument();
+            await userEvent.click(link);
+            expect(handleImageClick).toHaveBeenCalledWith(props.index);
+            expect(network.requests.map(({path}) => path)).toEqual([thumbnailPath]);
+        } finally {
+            network.restore();
+        }
+    });
+
+    test('continues to render an animated GIF from the original when it has no generated preview', () => {
+        const network = mockXHR();
+        const fileInfo = {...baseFileInfo, extension: 'gif', name: 'animation.gif', has_preview_image: false};
+        const originalPath = '/api/v4/files/thumbnail_id';
+        try {
+            renderWithContext(
+                <FileAttachment
+                    {...baseProps}
+                    fileInfo={fileInfo}
+                />,
+            );
+            act(() => network.respond(originalPath, 200));
+
+            const link = screen.getByRole('link', {name: 'file thumbnail animation.gif'});
+            expect(link.querySelector<HTMLElement>('.post-image')?.style.backgroundImage).toContain(originalPath);
+            expect(link.querySelector('.file-icon.generic')).not.toBeInTheDocument();
+            expect(network.requests.map(({path}) => path)).toEqual([originalPath]);
+        } finally {
+            network.restore();
+        }
     });
 });

@@ -5,10 +5,10 @@ import React from 'react';
 
 import FilePreviewModal, {computeZoomAtCursor} from 'components/file_preview_modal/file_preview_modal';
 
-import {act, render} from 'tests/react_testing_utils';
+import {mockXHR} from 'tests/mock_xhr';
+import {act, fireEvent, renderWithContext, screen, userEvent} from 'tests/react_testing_utils';
 import Constants from 'utils/constants';
 import {TestHelper} from 'utils/test_helper';
-import * as Utils from 'utils/utils';
 
 jest.mock('react-bootstrap', () => {
     const Modal = ({children, show}: {children: React.ReactNode; show: boolean}) => (show ? <div>{children}</div> : null);
@@ -29,8 +29,6 @@ jest.mock('components/code_preview', () => ({
     hasSupportedLanguage: () => true,
     canToggleMarkdownPreview: jest.requireActual('components/code_preview').canToggleMarkdownPreview,
 }));
-jest.mock('components/file_info_preview', () => () => <div>{'File Info Preview'}</div>);
-jest.mock('components/loading_image_preview', () => () => <div>{'Loading Image Preview'}</div>);
 jest.mock('components/pdf_preview', () => ({
     __esModule: true,
     default: () => <div>{'PDF Preview'}</div>,
@@ -44,8 +42,17 @@ jest.mock('components/file_preview_modal/file_preview_modal_header/file_preview_
     mockHeader(props);
     return <div>{'File Preview Modal Header'}</div>;
 });
-jest.mock('components/file_preview_modal/image_preview', () => () => <div>{'Image Preview'}</div>);
 jest.mock('components/file_preview_modal/popover_bar', () => () => <div>{'Popover Bar'}</div>);
+
+let network: ReturnType<typeof mockXHR>;
+
+beforeEach(() => {
+    network = mockXHR();
+});
+
+afterEach(() => {
+    network.restore();
+});
 
 describe('components/FilePreviewModal', () => {
     const baseProps = {
@@ -60,7 +67,7 @@ describe('components/FilePreviewModal', () => {
 
     const renderModal = (props = baseProps) => {
         const ref = React.createRef<FilePreviewModal>();
-        const utils = render(
+        const utils = renderWithContext(
             <FilePreviewModal
                 ref={ref}
                 {...props}
@@ -131,35 +138,7 @@ describe('components/FilePreviewModal', () => {
         expect(ref.current?.state.show).toBe(false);
     });
 
-    test('should correctly identify image URLs with isImageUrl method', () => {
-        const {ref} = renderModal();
-
-        // Test proxied image URLs
-        expect(ref.current?.isImageUrl('http://localhost:8065/api/v4/image?url=https%3A%2F%2Fexample.com%2Fimage.jpg')).toBe(true);
-
-        // Test URLs with image extensions
-        expect(ref.current?.isImageUrl('https://example.com/image.jpg')).toBe(true);
-        expect(ref.current?.isImageUrl('https://example.com/image.png')).toBe(true);
-        expect(ref.current?.isImageUrl('https://example.com/image.gif')).toBe(true);
-
-        // Test non-image URLs
-        expect(ref.current?.isImageUrl('https://example.com/document.pdf')).toBe(false);
-        expect(ref.current?.isImageUrl('https://example.com/file.txt')).toBe(false);
-    });
-
-    test('should handle external image URLs correctly', () => {
-        // Create a mock for Utils.loadImage
-        const loadImageSpy = jest.spyOn(Utils, 'loadImage').mockImplementation((url, onLoad) => {
-            // Create a mock ProgressEvent
-            const mockProgressEvent = new ProgressEvent('progress');
-
-            // Call onLoad with the mock event if it exists
-            if (onLoad) {
-                onLoad.call({} as XMLHttpRequest, mockProgressEvent);
-            }
-        });
-
-        // Create a LinkInfo object for an external image URL
+    test('displays an external image using its supplied URL', () => {
         const externalImageUrl = 'http://localhost:8065/api/v4/image?url=https%3A%2F%2Fexample.com%2Fimage.jpg';
         const fileInfos = [
             TestHelper.getFileInfoMock({
@@ -171,27 +150,113 @@ describe('components/FilePreviewModal', () => {
             }),
         ];
 
-        const props = {...baseProps, fileInfos};
-        const {ref} = renderModal(props);
+        renderModal({...baseProps, fileInfos});
+        act(() => network.respond('/api/v4/image', 200));
 
-        const handleImageLoadedSpy = jest.spyOn(ref.current as FilePreviewModal, 'handleImageLoaded');
+        expect(screen.getByRole('img', {name: 'preview url image'})).toHaveAttribute('src', externalImageUrl);
+    });
 
-        act(() => {
-            ref.current?.loadImage(0);
+    describe('generated image previews', () => {
+        const first = TestHelper.getFileInfoMock({id: 'photo', name: 'photo.jpg', extension: 'jpg'});
+        const second = TestHelper.getFileInfoMock({id: 'other', name: 'other.jpg', extension: 'jpg'});
+        const photoPath = '/api/v4/files/photo';
+        const previewPath = '/api/v4/files/photo/preview';
+        const otherPreviewPath = '/api/v4/files/other/preview';
+        const previewModal = (fileInfos = [first]) => (
+            <FilePreviewModal
+                {...baseProps}
+                fileInfos={fileInfos}
+            />
+        );
+        const displayedImage = () => screen.getByRole<HTMLImageElement>('img', {name: 'preview url image'});
+
+        function expectFileIconAndDetails() {
+            expect(screen.getByText(first.name)).toBeVisible();
+            expect(screen.getByRole('img', {name: 'file preview'})).toBeVisible();
+            expect(screen.queryByRole('img', {name: 'preview url image'})).not.toBeInTheDocument();
+        }
+
+        test('displays a successful preview', () => {
+            renderWithContext(previewModal());
+            act(() => network.respond(previewPath, 200));
+
+            expect(displayedImage()).toHaveAttribute('src', expect.stringContaining(previewPath));
         });
 
-        // Verify that Utils.loadImage was called with the correct URL
-        expect(loadImageSpy).toHaveBeenCalledWith(
-            externalImageUrl,
-            expect.any(Function),
-            expect.any(Function),
-        );
+        test('displays the original after a preview 404 and keeps it when revisiting the attachment', async () => {
+            renderWithContext(previewModal([first, second]));
+            act(() => network.respond(previewPath, 404));
 
-        // Verify that handleImageLoaded was called
-        expect(handleImageLoadedSpy).toHaveBeenCalled();
+            const image = displayedImage();
+            expect(image.src).toBe(new URL(photoPath, window.location.href).href);
+            fireEvent.load(image);
+            expect(image).toBeVisible();
 
-        // Restore the original loadImage function
-        loadImageSpy.mockRestore();
+            await userEvent.keyboard('{ArrowRight}');
+            act(() => network.respond(otherPreviewPath, 200));
+            expect(displayedImage()).toHaveAttribute('src', expect.stringContaining(otherPreviewPath));
+
+            await userEvent.keyboard('{ArrowLeft}');
+            expect(displayedImage().src).toBe(new URL(photoPath, window.location.href).href);
+            expect(network.requests.map(({path}) => path)).toEqual([previewPath, otherPreviewPath]);
+        });
+
+        test('shows the file icon and filename when the original also fails to load', () => {
+            renderWithContext(previewModal());
+            act(() => network.respond(previewPath, 404));
+            const image = displayedImage();
+            expect(image.src).toBe(new URL(photoPath, window.location.href).href);
+            fireEvent.error(image);
+
+            expectFileIconAndDetails();
+            expect(network.requests.map(({path}) => path)).toEqual([previewPath]);
+        });
+
+        test('keeps a single pending preview request when navigating away and back', async () => {
+            renderWithContext(previewModal([first, second]));
+
+            await userEvent.keyboard('{ArrowRight}{ArrowLeft}');
+            expect(network.requests.map(({path}) => path)).toEqual([previewPath, otherPreviewPath]);
+            act(() => network.respond(previewPath, 200));
+
+            expect(displayedImage()).toHaveAttribute('src', expect.stringContaining(previewPath));
+        });
+
+        test.each([403, 500])('shows the file icon without trying the original on HTTP %s', (status) => {
+            renderWithContext(previewModal());
+            act(() => network.respond(previewPath, status));
+
+            expectFileIconAndDetails();
+            expect(network.requests.map(({path}) => path)).toEqual([previewPath]);
+        });
+
+        test('clears the progress indicator after a network error', () => {
+            renderWithContext(previewModal());
+            expect(screen.getByTestId('loadingSpinner')).toBeVisible();
+            expect(network.requests.map(({path}) => path)).toEqual([previewPath]);
+            act(() => network.requests[0].xhr.dispatchEvent(new ProgressEvent('error')));
+
+            expectFileIconAndDetails();
+            expect(screen.queryByTestId('loadingSpinner')).not.toBeInTheDocument();
+        });
+
+        test('ignores a late failure for an attachment that has been replaced', () => {
+            const {rerender} = renderWithContext(previewModal());
+            const abortFirst = jest.spyOn(network.requests[0].xhr, 'abort');
+            rerender(previewModal([second]));
+            expect(abortFirst).toHaveBeenCalledTimes(1);
+            act(() => network.respond(otherPreviewPath, 200));
+            act(() => network.respond(previewPath, 404));
+
+            expect(displayedImage()).toHaveAttribute('src', expect.stringContaining(otherPreviewPath));
+        });
+
+        test('cancels a pending request on unmount', () => {
+            const {unmount} = renderWithContext(previewModal());
+            const abort = jest.spyOn(network.requests[0].xhr, 'abort');
+            unmount();
+            expect(abort).toHaveBeenCalledTimes(1);
+        });
     });
 
     test('should have called loadImage', () => {
@@ -384,7 +449,7 @@ describe('FilePreviewModal instance behavior', () => {
 
     const mountModal = (props = imageProps) => {
         const ref = React.createRef<FilePreviewModal>();
-        const utils = render(
+        const utils = renderWithContext(
             <FilePreviewModal
                 ref={ref}
                 {...props}
@@ -679,7 +744,7 @@ describe('FilePreviewModal markdown view', () => {
 
     const mountMarkdownModal = (props = mdProps) => {
         const ref = React.createRef<FilePreviewModal>();
-        const utils = render(
+        const utils = renderWithContext(
             <FilePreviewModal
                 ref={ref}
                 {...props}

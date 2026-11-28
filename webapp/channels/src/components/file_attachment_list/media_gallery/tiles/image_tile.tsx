@@ -1,13 +1,13 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import React, {useCallback} from 'react';
+import React, {useCallback, useState} from 'react';
 import type {CSSProperties} from 'react';
 import {useIntl} from 'react-intl';
 
 import type {FileInfo} from '@mattermost/types/files';
 
-import {getFilePreviewUrl, getFileThumbnailUrl, getFileUrl} from 'mattermost-redux/utils/file_utils';
+import {getFilePreviewUrl, getFileUrl} from 'mattermost-redux/utils/file_utils';
 
 import {isGIFImage} from 'utils/utils';
 
@@ -25,6 +25,7 @@ type Props = {
 
 const ImageTile = ({fileInfo, index, total, enablePublicLink, onClick}: Props) => {
     const {formatMessage} = useIntl();
+    const [failedSrc, setFailedSrc] = useState<string>();
 
     const handleActivate = useCallback(() => {
         onClick(index);
@@ -45,7 +46,8 @@ const ImageTile = ({fileInfo, index, total, enablePublicLink, onClick}: Props) =
         }
     }, [handleActivate]);
 
-    const src = isGIFImage(fileInfo.extension) ? getFileUrl(fileInfo.id) : getFilePreviewUrl(fileInfo.id) || getFileThumbnailUrl(fileInfo.id);
+    const src = isGIFImage(fileInfo.extension) ? getFileUrl(fileInfo.id) : getFilePreviewUrl(fileInfo.id);
+    const imageFailed = failedSrc === src;
 
     const label = formatMessage(
         {id: 'media_gallery.image_label', defaultMessage: 'Image {current} of {total}: {name}'},
@@ -68,14 +70,23 @@ const ImageTile = ({fileInfo, index, total, enablePublicLink, onClick}: Props) =
             data-file-name={fileInfo.name || ''}
             style={tileSizeVars(fileInfo)}
             onKeyDown={handleKeyDown}
+            onClick={imageFailed ? handleImageClick : undefined}
         >
-            <img
-                src={src}
-                alt={fileInfo.name || ''}
-                loading='lazy'
-                style={imgStyle}
-                onClick={handleImageClick}
-            />
+            {imageFailed ? (
+                <div
+                    className='file-icon generic cursor--pointer'
+                    aria-hidden='true'
+                />
+            ) : (
+                <img
+                    src={src}
+                    alt={fileInfo.name || ''}
+                    loading='lazy'
+                    style={imgStyle}
+                    onClick={handleImageClick}
+                    onError={() => setFailedSrc(src)}
+                />
+            )}
             <TileUtilityButtons
                 fileInfo={fileInfo}
                 enablePublicLink={enablePublicLink}
