@@ -1,12 +1,11 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {fireEvent} from '@testing-library/react';
 import React from 'react';
 
 import ImagePreview from 'components/file_preview_modal/image_preview';
 
-import {render, screen} from 'tests/react_testing_utils';
+import {fireEvent, render, screen} from 'tests/react_testing_utils';
 import {TestHelper} from 'utils/test_helper';
 
 describe('components/view_image/ImagePreview', () => {
@@ -15,6 +14,24 @@ describe('components/view_image/ImagePreview', () => {
         canDownloadFiles: true,
         fileInfo: fileInfo1,
     };
+
+    test.each([true, false])('renders the fallback source and reports image errors with downloads enabled=%s', (canDownloadFiles) => {
+        const src = '/api/v4/files/file_id';
+        const onImageError = jest.fn();
+        const {container} = render(
+            <ImagePreview
+                {...baseProps}
+                canDownloadFiles={canDownloadFiles}
+                src={src}
+                onImageError={onImageError}
+            />,
+        );
+
+        const image = container.querySelector('img')!;
+        expect(image).toHaveAttribute('src', src);
+        fireEvent.error(image);
+        expect(onImageError).toHaveBeenCalledTimes(1);
+    });
 
     test('should apply transform when scale is provided and not 1', () => {
         const props = {

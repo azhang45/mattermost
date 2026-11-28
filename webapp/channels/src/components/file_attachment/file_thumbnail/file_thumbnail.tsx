@@ -26,6 +26,10 @@ type Props = {
     isRejected?: boolean;
 };
 
+export function getRasterThumbnailUrl(id: string, extension?: string, hasPreviewImage?: boolean): string {
+    return extension && isGIFImage(extension) && !hasPreviewImage ? getFileUrl(id) : getFileThumbnailUrl(id);
+}
+
 const FileThumbnail = ({
     fileInfo,
     enableSVGs,
@@ -53,10 +57,7 @@ const FileThumbnail = ({
                 className += ' normal';
             }
 
-            let thumbnailUrl = getFileThumbnailUrl(id);
-            if (extension && isGIFImage(extension) && !hasPreviewImage) {
-                thumbnailUrl = getFileUrl(id);
-            }
+            const thumbnailUrl = getRasterThumbnailUrl(id, extension, hasPreviewImage);
 
             return (
                 <div

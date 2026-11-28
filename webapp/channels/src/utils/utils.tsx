@@ -882,30 +882,26 @@ export function isValidBotUsername(name: string) {
 
 export function loadImage(
     url: string,
-    onLoad: ((this: XMLHttpRequest, ev: ProgressEvent) => any) | null,
-    onProgress?: (completedPercentage: number) => any | null,
+    onLoad: ((this: XMLHttpRequest, ev: ProgressEvent) => void) | null,
+    onProgress?: (completedPercentage: number) => void,
+    onError?: () => void,
 ) {
     const request = new XMLHttpRequest();
 
     request.open('GET', url, true);
     request.responseType = 'arraybuffer';
     request.onload = onLoad;
-    request.onprogress = (e) => {
-        if (onProgress) {
-            let total = 0;
-            if (e.lengthComputable) {
-                total = e.total;
-            } else {
-                total = parseInt((e.target as any).getResponseHeader('X-Uncompressed-Content-Length'), 10);
-            }
-
-            const completedPercentage = Math.round((e.loaded / total) * 100);
-
-            (onProgress as any)(completedPercentage);
-        }
-    };
+    request.onerror = onError ?? null;
+    request.ontimeout = onError ?? null;
+    if (onProgress) {
+        request.onprogress = (e) => {
+            const total = e.lengthComputable ? e.total : parseInt(request.getResponseHeader('X-Uncompressed-Content-Length') ?? '', 10);
+            onProgress(Math.round((e.loaded / total) * 100));
+        };
+    }
 
     request.send();
+    return request;
 }
 
 function changeColor(colourIn: string, amt: number): string {

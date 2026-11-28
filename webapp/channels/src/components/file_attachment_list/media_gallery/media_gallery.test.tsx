@@ -1,13 +1,11 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {act, screen, waitFor, within} from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import React from 'react';
 
 import type {FileInfo} from '@mattermost/types/files';
 
-import {renderWithContext} from 'tests/react_testing_utils';
+import {act, fireEvent, renderWithContext, screen, userEvent, waitFor, within} from 'tests/react_testing_utils';
 
 import {ArchiveFileError, ArchiveTooLargeError, buildFileArchive} from './file_archive';
 import MediaGallery from './media_gallery';
@@ -95,6 +93,25 @@ describe('MediaGallery', () => {
             baseState,
         );
         expect(screen.getByTestId('media-gallery-tile')).toBeInTheDocument();
+    });
+
+    it('replaces a failed image with a clickable file icon', async () => {
+        const onClick = jest.fn();
+        renderWithContext(
+            <MediaGallery
+                fileInfos={[fileInfo({})]}
+                postId='p1'
+                onItemClick={onClick}
+            />,
+            baseState,
+        );
+        const tile = screen.getByTestId('media-gallery-tile');
+        fireEvent.error(within(tile).getByRole('img', {name: 'image.png'}));
+
+        const icon = tile.querySelector('.file-icon.generic');
+        expect(icon).toBeInTheDocument();
+        await userEvent.click(icon!);
+        expect(onClick).toHaveBeenCalledWith(0);
     });
 
     it('renders a collapse toggle header for multi-image galleries when a toggle handler is provided', async () => {

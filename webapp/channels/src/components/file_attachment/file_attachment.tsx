@@ -8,7 +8,7 @@ import {useIntl} from 'react-intl';
 import {WithTooltip} from '@mattermost/shared/components/tooltip';
 import type {FileInfo} from '@mattermost/types/files';
 
-import {getFileThumbnailUrl, getFileUrl} from 'mattermost-redux/utils/file_utils';
+import {getFileUrl} from 'mattermost-redux/utils/file_utils';
 
 import GetPublicModal from 'components/get_public_link_modal';
 import Menu from 'components/widgets/menu/menu';
@@ -22,6 +22,7 @@ import {
 } from 'utils/utils';
 
 import FileThumbnail from './file_thumbnail';
+import {getRasterThumbnailUrl} from './file_thumbnail/file_thumbnail';
 import FilenameOverlay from './filename_overlay';
 
 import type {PropsFromRedux} from './index';
@@ -55,78 +56,39 @@ type Props = PropsFromRedux & {
 };
 
 export default function FileAttachment(props: Props) {
-    const mounted = useRef(true);
-
     const {formatMessage} = useIntl();
 
-    const [loaded, setLoaded] = useState(getFileType(props.fileInfo.extension) !== FileTypes.IMAGE);
-    const [loadFilesCalled, setLoadFilesCalled] = useState(false);
+    const [thumbnailResult, setThumbnailResult] = useState<{src: string; loaded: boolean}>();
     const [keepOpen, setKeepOpen] = useState(false);
     const [openUp, setOpenUp] = useState(false);
     const [showTooltip, setShowTooltip] = useState(true);
 
     const buttonRef = useRef<HTMLButtonElement | null>(null);
 
-    const handleImageLoaded = () => {
-        if (mounted.current) {
-            setLoaded(true);
+    const {compactDisplay, fileInfo} = props;
+    const previewEnabled = Boolean(fileInfo.id && !compactDisplay && !props.disablePreview && !props.disableThumbnail && !props.isFileRejected);
+    let thumbnailSrc: string | undefined;
+    if (previewEnabled) {
+        if (getFileType(fileInfo.extension) === FileTypes.IMAGE) {
+            thumbnailSrc = getRasterThumbnailUrl(fileInfo.id, fileInfo.extension, fileInfo.has_preview_image);
+        } else if (fileInfo.extension === FileTypes.SVG && props.enableSVGs) {
+            thumbnailSrc = getFileUrl(fileInfo.id);
         }
-    };
-
-    const loadFiles = () => {
-        const fileInfo = props.fileInfo;
-
-        // If file is rejected, don't try to load thumbnail - just mark as loaded
-        // so it shows the file icon instead
-        if (props.isFileRejected) {
-            setLoaded(true);
-            return;
-        }
-
-        const fileType = getFileType(fileInfo.extension);
-
-        if (!props.disableThumbnail) {
-            if (fileType === FileTypes.IMAGE) {
-                const thumbnailUrl = getFileThumbnailUrl(fileInfo.id);
-
-                loadImage(thumbnailUrl, handleImageLoaded);
-            } else if (fileInfo.extension === FileTypes.SVG && props.enableSVGs) {
-                loadImage(getFileUrl(fileInfo.id), handleImageLoaded);
-            }
-        }
-    };
+    }
+    const thumbnailLoaded = thumbnailResult && thumbnailResult.src === thumbnailSrc ? thumbnailResult.loaded : undefined;
 
     useEffect(() => {
-        if (!loadFilesCalled) {
-            setLoadFilesCalled(true);
-            loadFiles();
+        if (!thumbnailSrc) {
+            return undefined;
         }
-    }, [loadFilesCalled]);
 
-    useEffect(() => {
-        if (!loaded && props.fileInfo.id) {
-            loadFiles();
-        }
-    }, [props.fileInfo.id, loaded]);
+        const src = thumbnailSrc;
+        const request = loadImage(src, function onLoad() {
+            setThumbnailResult({src, loaded: this.status >= 200 && this.status < 300});
+        }, undefined, () => setThumbnailResult({src, loaded: false}));
 
-    useEffect(() => {
-        return () => {
-            mounted.current = false;
-        };
-    }, []);
-
-    useEffect(() => {
-        if (props.fileInfo.id) {
-            setLoaded(getFileType(props.fileInfo.extension) !== FileTypes.IMAGE && !(props.enableSVGs && props.fileInfo.extension === FileTypes.SVG));
-        }
-    }, [props.fileInfo.extension, props.fileInfo.id, props.enableSVGs]);
-
-    // If file becomes rejected, mark as loaded so it shows the file icon
-    useEffect(() => {
-        if (props.isFileRejected) {
-            setLoaded(true);
-        }
-    }, [props.isFileRejected]);
+        return () => request.abort();
+    }, [thumbnailSrc]);
 
     const onAttachmentClick = (e: React.MouseEvent<HTMLElement, MouseEvent>) => {
         e.preventDefault();
@@ -266,8 +228,6 @@ export default function FileAttachment(props: Props) {
         );
     };
 
-    const {compactDisplay, fileInfo} = props;
-
     let fileThumbnail;
     let fileDetail;
     let fileActions;
@@ -281,15 +241,15 @@ export default function FileAttachment(props: Props) {
                 href='#'
                 onClick={onAttachmentClick}
             >
-                {loaded && !props.disableThumbnail ? (
-                    <FileThumbnail
-                        fileInfo={fileInfo}
-                        disablePreview={props.disablePreview}
+                {thumbnailLoaded === false ? (
+                    <div
+                        className='file-icon generic'
+                        aria-hidden='true'
                     />
                 ) : (
                     <FileThumbnail
-                        fileInfo={props.fileInfo}
-                        disablePreview={true}
+                        fileInfo={fileInfo}
+                        disablePreview={!previewEnabled || (thumbnailSrc !== undefined && !thumbnailLoaded)}
                     />
                 )}
             </a>

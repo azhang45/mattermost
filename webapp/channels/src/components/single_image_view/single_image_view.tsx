@@ -3,7 +3,6 @@
 
 import classNames from 'classnames';
 import React from 'react';
-import type {KeyboardEvent, MouseEvent} from 'react';
 import {injectIntl} from 'react-intl';
 import type {WrappedComponentProps} from 'react-intl';
 
@@ -37,6 +36,9 @@ export interface Props extends PropsFromRedux {
 
 type State = {
     loaded: boolean;
+    imageFailed: boolean;
+    fileId?: string;
+    hasPreviewImage?: boolean;
     dimensions: {
         width: number;
         height: number;
@@ -46,7 +48,7 @@ type State = {
 };
 
 class SingleImageView extends React.PureComponent<Props & WrappedComponentProps, State> {
-    private mounted = false;
+    private thumbnailCheck?: AbortController;
     static defaultProps = {
         compactDisplay: false,
     };
@@ -55,6 +57,9 @@ class SingleImageView extends React.PureComponent<Props & WrappedComponentProps,
         super(props);
         this.state = {
             loaded: false,
+            imageFailed: false,
+            fileId: props.fileInfo?.id,
+            hasPreviewImage: props.fileInfo?.has_preview_image,
             dimensions: {
                 width: props.fileInfo?.width || 0,
                 height: props.fileInfo?.height || 0,
@@ -65,8 +70,15 @@ class SingleImageView extends React.PureComponent<Props & WrappedComponentProps,
     }
 
     componentDidMount() {
-        this.mounted = true;
         this.checkThumbnailAvailability();
+    }
+
+    componentDidUpdate(prevProps: Props) {
+        if (prevProps.fileInfo?.id !== this.props.fileInfo?.id ||
+            prevProps.fileInfo?.has_preview_image !== this.props.fileInfo?.has_preview_image) {
+            this.thumbnailCheck?.abort();
+            this.checkThumbnailAvailability();
+        }
     }
 
     checkThumbnailAvailability = () => {
@@ -75,20 +87,20 @@ class SingleImageView extends React.PureComponent<Props & WrappedComponentProps,
         // there's only one file in the post and we try to display it inline as a preview and
         // not as a thumbnail.
         const {fileInfo} = this.props;
-        if (!fileInfo || !fileInfo.has_preview_image) {
-            // No preview image, so we'll use the file directly - don't check thumbnail
-            this.setState({thumbnailCheckComplete: true, thumbnailRejected: false});
+        if (!fileInfo?.has_preview_image) {
             return;
         }
 
+        const controller = new AbortController();
+        this.thumbnailCheck = controller;
         const thumbnailUrl = getFileThumbnailUrl(fileInfo.id);
 
         // Use Client4.getOptions() to get properly authenticated request options
         // This includes the Bearer token and all required headers
-        const options = Client4.getOptions({method: 'HEAD'});
+        const options = Client4.getOptions({method: 'HEAD', signal: controller.signal});
 
         fetch(thumbnailUrl, options).then((response) => {
-            if (this.mounted) {
+            if (!controller.signal.aborted) {
                 // 403 Forbidden with X-Reject-Reason header = rejected by plugin
                 const rejected = response.status === 403 && response.headers.get(HttpHeaders.REJECT_REASON) !== null;
                 this.setState({
@@ -98,7 +110,7 @@ class SingleImageView extends React.PureComponent<Props & WrappedComponentProps,
             }
         }).catch(() => {
             // On error, assume not rejected (fail open for compatibility)
-            if (this.mounted) {
+            if (!controller.signal.aborted) {
                 this.setState({
                     thumbnailCheckComplete: true,
                     thumbnailRejected: false,
@@ -108,28 +120,37 @@ class SingleImageView extends React.PureComponent<Props & WrappedComponentProps,
     };
 
     static getDerivedStateFromProps(props: Props, state: State) {
-        if ((props.fileInfo?.width !== state.dimensions.width) || props.fileInfo.height !== state.dimensions.height) {
-            return {
-                dimensions: {
-                    width: props.fileInfo?.width,
-                    height: props.fileInfo?.height,
-                },
-            };
+        const {fileInfo} = props;
+        const width = fileInfo?.width ?? 0;
+        const height = fileInfo?.height ?? 0;
+        const updates: Partial<State> = {};
+        if (fileInfo?.id !== state.fileId || fileInfo?.has_preview_image !== state.hasPreviewImage) {
+            updates.fileId = fileInfo?.id;
+            updates.hasPreviewImage = fileInfo?.has_preview_image;
+            updates.loaded = false;
+            updates.imageFailed = false;
+            updates.thumbnailCheckComplete = !fileInfo?.has_preview_image;
+            updates.thumbnailRejected = false;
         }
-        return null;
+        if (width !== state.dimensions.width || height !== state.dimensions.height) {
+            updates.dimensions = {width, height};
+        }
+        return Object.keys(updates).length ? updates : null;
     }
 
     componentWillUnmount() {
-        this.mounted = false;
+        this.thumbnailCheck?.abort();
     }
 
     imageLoaded = () => {
-        if (this.mounted) {
-            this.setState({loaded: true});
-        }
+        this.setState({loaded: true});
     };
 
-    handleImageClick = (e: (KeyboardEvent<HTMLImageElement> | MouseEvent<HTMLDivElement | HTMLImageElement>)) => {
+    imageLoadFailed = () => {
+        this.setState({imageFailed: true});
+    };
+
+    handleImageClick = (e: React.SyntheticEvent) => {
         e.preventDefault();
 
         this.props.actions.openModal({
@@ -307,22 +328,33 @@ class SingleImageView extends React.PureComponent<Props & WrappedComponentProps,
                             style={styleIfSvgWithDimensions}
                         >
                             <div className={classNames(permalinkClass)}>
-                                <SizeAwareImage
-                                    onClick={this.handleImageClick}
-                                    className={classNames(minPreviewClass, permalinkClass)}
-                                    src={previewURL}
-                                    dimensions={this.state.dimensions}
-                                    fileInfo={this.props.fileInfo}
-                                    fileURL={fileURL}
-                                    onImageLoaded={this.imageLoaded}
-                                    showLoader={this.props.isEmbedVisible}
-                                    renderPlaceholderOnly={renderPlaceholderOnly}
-                                    handleSmallImageContainer={true}
-                                    enablePublicLink={this.props.enablePublicLink}
-                                    getFilePublicLink={this.getFilePublicLink}
-                                    hideUtilities={this.props.disableActions}
-                                    isFileRejected={effectivelyRejected}
-                                />
+                                {this.state.imageFailed ? (
+                                    <button
+                                        type='button'
+                                        className='single-image-view__fallback post-image file-icon generic'
+                                        aria-label={fileInfo.name}
+                                        onClick={this.handleImageClick}
+                                    />
+                                ) : (
+                                    <SizeAwareImage
+                                        key={previewURL}
+                                        onClick={this.handleImageClick}
+                                        className={classNames(minPreviewClass, permalinkClass)}
+                                        src={previewURL}
+                                        dimensions={this.state.dimensions}
+                                        fileInfo={this.props.fileInfo}
+                                        fileURL={fileURL}
+                                        onImageLoaded={this.imageLoaded}
+                                        onImageLoadFail={this.imageLoadFailed}
+                                        showLoader={this.props.isEmbedVisible}
+                                        renderPlaceholderOnly={renderPlaceholderOnly}
+                                        handleSmallImageContainer={true}
+                                        enablePublicLink={this.props.enablePublicLink}
+                                        getFilePublicLink={this.getFilePublicLink}
+                                        hideUtilities={this.props.disableActions}
+                                        isFileRejected={effectivelyRejected}
+                                    />
+                                )}
                             </div>
                         </div>
                     </div>
